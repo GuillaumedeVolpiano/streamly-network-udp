@@ -1,0 +1,64 @@
+cabal-version:   3.12
+name:            streamly-network-udp
+version:         0.1.0.0
+synopsis:        UDP datagrams as Streamly streams
+description:
+  UDP sockets for Streamly, over the network package: the datagrams
+  received are a stream, each with its sender; datagrams are sent one by
+  one or through a fold. With the broadcast option and, for IPv4, multicast
+  groups.
+
+homepage:        https://github.com/GuillaumedeVolpiano/streamly-network-udp
+license:         BSD-3-Clause
+license-file:    LICENSE
+author:          GuillaumedeVolpiano
+maintainer:      xavier@wheredoibegin.fr
+category:        Network, Streamly
+build-type:      Simple
+tested-with:     GHC ==9.12.4
+extra-doc-files:
+  CHANGELOG.md
+  README.md
+
+source-repository head
+  type:     git
+  location: https://github.com/GuillaumedeVolpiano/streamly-network-udp.git
+
+common shared
+  default-language:   GHC2024
+  default-extensions:
+    DuplicateRecordFields
+    NoFieldSelectors
+    OverloadedRecordDot
+    OverloadedStrings
+
+  ghc-options:
+    -Wall -Wcompat -Wredundant-constraints -Wmissing-deriving-strategies
+    -Wunused-packages
+
+library
+  import:          shared
+  hs-source-dirs:  src
+  exposed-modules: Streamly.External.Network.UDP
+  other-modules:   Streamly.External.Network.UDP.Constants
+  build-depends:
+    , base                 ^>=4.21
+    , network              ^>=3.2
+    , streamly-bytestring  ^>=0.2.3
+    , streamly-core        ^>=0.3.3
+
+test-suite streamly-network-udp-test
+  import:         shared
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: test
+  main-is:        Main.hs
+  ghc-options:    -threaded
+  build-depends:
+    , base                  ^>=4.21
+    , bytestring            ^>=0.12
+    , network               ^>=3.2
+    , streamly-bytestring   ^>=0.2.3
+    , streamly-core         ^>=0.3.3
+    , streamly-network-udp
+    , tasty                 ^>=1.5
+    , tasty-hunit           ^>=0.10
