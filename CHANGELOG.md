@@ -1,6 +1,6 @@
 # Revision history for streamly-network-udp
 
-## 0.1.0.0 -- unreleased
+## 0.1.0.0 -- 2026-11-21
 
 * UDP sockets bound to an address (`withSocket`), with the address reuse
   and broadcast options.
