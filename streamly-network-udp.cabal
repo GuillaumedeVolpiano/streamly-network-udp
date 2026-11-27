@@ -62,11 +62,11 @@ test-suite streamly-network-udp-test
   main-is:        Main.hs
   ghc-options:    -threaded
   build-depends:
-    , base                  >=4.19 && <4.22
+    , base
     , bytestring            ^>=0.12
-    , network               ^>=3.2
-    , streamly-bytestring   ^>=0.2.3
-    , streamly-core         ^>=0.3.3
+    , network
+    , streamly-bytestring
+    , streamly-core
     , streamly-network-udp
     , tasty                 ^>=1.5
     , tasty-hunit           ^>=0.10
