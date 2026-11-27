@@ -7,17 +7,17 @@
 -- received are a stream, each with the address of its sender; datagrams
 -- are sent one by one or through a fold.
 --
--- > {-# LANGUAGE OverloadedRecordDot #-}
--- > import Network.Socket (SockAddr (..), tupleToHostAddress)
--- > import Streamly.Data.Array qualified as Array
--- > import Streamly.Data.Stream qualified as Stream
--- > import Streamly.External.Network.UDP
+-- > import Network.Socket (SockAddr (SockAddrInet), tupleToHostAddress)
+-- > import Streamly.Data.Array (fromList)
+-- > import Streamly.Data.Stream (toList)
+-- > import Streamly.External.Network.UDP (anyAddress, datagramsWithin, sendTo,
+-- >                                       socketAt, withSocket)
 -- >
 -- > -- Ask, and collect the answers that come within a second.
 -- > main :: IO ()
 -- > main = withSocket (socketAt anyAddress) $ \socket -> do
--- >   sendTo socket (SockAddrInet 9003 (tupleToHostAddress (192, 0, 2, 1))) (Array.fromList [1, 2, 3])
--- >   answers <- Stream.toList (datagramsWithin 1000000 socket)
+-- >   sendTo socket (SockAddrInet 9003 (tupleToHostAddress (192, 0, 2, 1))) (fromList [1, 2, 3])
+-- >   answers <- toList (datagramsWithin 1000000 socket)
 -- >   print (map fst answers)
 --
 -- Unix only: the multicast options are set as Unix systems expect them.
@@ -55,20 +55,26 @@ import Foreign.C.Types (CInt)
 import Foreign.Ptr (castPtr, plusPtr)
 import Foreign.Storable (Storable (..))
 import GHC.Clock (getMonotonicTimeNSec)
-import Network.Socket qualified as Net
-import Network.Socket.ByteString qualified as NetBS
+import Network.Socket (Family (AF_INET, AF_INET6, AF_UNIX), HostAddress,
+                       SockAddr (..), Socket,
+                       SocketOption (Broadcast, ReuseAddr, SockOpt),
+                       SocketType (Datagram), bind, close, defaultProtocol,
+                       setSockOpt, setSocketOption)
+import Network.Socket qualified as N (socket)
+import Network.Socket.ByteString (recvFrom)
+import Network.Socket.ByteString qualified as NB (sendTo)
 import Streamly.Data.Array (Array)
-import Streamly.Data.Fold (Fold)
-import Streamly.Data.Fold qualified as Fold
-import Streamly.Data.Stream (Stream)
-import Streamly.Data.Stream qualified as Stream
-import Streamly.External.ByteString qualified as StreamlyBS
-import Streamly.External.Network.UDP.Constants
+import Streamly.Data.Fold (Fold, drainMapM)
+import Streamly.Data.Stream (Stream, repeatM, unfoldrM)
+import Streamly.External.ByteString (fromArray, toArray)
+import Streamly.External.Network.UDP.Constants (addMembership, dropMembership,
+                                                ipProtocol, multicastLoop,
+                                                multicastTtl)
 import System.Timeout (timeout)
 
 -- | How to open a socket.
 data SocketConfig = SocketConfig
-  { address :: Net.SockAddr
+  { address :: SockAddr
   -- ^ The address and the port to bind to. Its family is that of the
   -- socket.
   , reuseAddress :: Bool
@@ -80,27 +86,27 @@ data SocketConfig = SocketConfig
   deriving stock (Eq, Show)
 
 -- | A socket bound to an address, alone on it and without broadcast.
-socketAt :: Net.SockAddr -> SocketConfig
+socketAt :: SockAddr -> SocketConfig
 socketAt address = SocketConfig {address, reuseAddress = False, broadcast = False}
 
 -- | Every IPv4 interface, on a port chosen by the system: what a socket
 -- that asks and listens to the answers needs.
-anyAddress :: Net.SockAddr
-anyAddress = Net.SockAddrInet 0 0
+anyAddress :: SockAddr
+anyAddress = SockAddrInet 0 0
 
 -- | Open a UDP socket, bind it, use it and close it.
-withSocket :: SocketConfig -> (Net.Socket -> IO a) -> IO a
+withSocket :: SocketConfig -> (Socket -> IO a) -> IO a
 withSocket settings use =
-  bracket (Net.socket family Net.Datagram Net.defaultProtocol) Net.close $ \socket -> do
-    when settings.reuseAddress (Net.setSocketOption socket Net.ReuseAddr 1)
+  bracket (N.socket family Datagram defaultProtocol) close $ \socket -> do
+    when settings.reuseAddress (setSocketOption socket ReuseAddr 1)
     when settings.broadcast (setBroadcast socket True)
-    Net.bind socket settings.address
+    bind socket settings.address
     use socket
   where
     family = case settings.address of
-      Net.SockAddrInet {} -> Net.AF_INET
-      Net.SockAddrInet6 {} -> Net.AF_INET6
-      Net.SockAddrUnix {} -> Net.AF_UNIX
+      SockAddrInet {} -> AF_INET
+      SockAddrInet6 {} -> AF_INET6
+      SockAddrUnix {} -> AF_UNIX
 
 -- | The largest datagram UDP can carry over IPv4, headers included: no
 -- datagram is cut when this much room is given to each.
@@ -109,18 +115,18 @@ maxDatagramSize = 65535
 
 -- | The datagrams received, each with the address of its sender, without
 -- end. An empty datagram is an empty array.
-datagrams :: MonadIO m => Net.Socket -> Stream m (Net.SockAddr, Array Word8)
+datagrams :: MonadIO m => Socket -> Stream m (SockAddr, Array Word8)
 datagrams = datagramsWith maxDatagramSize
 
 -- | Like 'datagrams', with the room given to each datagram, in bytes: a
 -- longer one is cut to it.
-datagramsWith :: MonadIO m => Int -> Net.Socket -> Stream m (Net.SockAddr, Array Word8)
-datagramsWith size socket = Stream.repeatM (liftIO (receiveFrom size socket))
+datagramsWith :: MonadIO m => Int -> Socket -> Stream m (SockAddr, Array Word8)
+datagramsWith size socket = repeatM (liftIO (receiveFrom size socket))
 
 -- | The datagrams received within a number of microseconds, counted from
 -- the moment the stream starts.
-datagramsWithin :: MonadIO m => Int -> Net.Socket -> Stream m (Net.SockAddr, Array Word8)
-datagramsWithin microseconds socket = Stream.unfoldrM step Nothing
+datagramsWithin :: MonadIO m => Int -> Socket -> Stream m (SockAddr, Array Word8)
+datagramsWithin microseconds socket = unfoldrM step Nothing
   where
     step started = liftIO $ do
       now <- getMonotonicTimeNSec
@@ -129,33 +135,33 @@ datagramsWithin microseconds socket = Stream.unfoldrM step Nothing
         then pure Nothing
         else fmap (,Just deadline) <$> timeout (fromIntegral ((deadline - now + 999) `div` 1000)) (receiveFrom maxDatagramSize socket)
 
-receiveFrom :: Int -> Net.Socket -> IO (Net.SockAddr, Array Word8)
+receiveFrom :: Int -> Socket -> IO (SockAddr, Array Word8)
 receiveFrom size socket = do
-  (bytes, sender) <- NetBS.recvFrom socket size
-  pure (sender, StreamlyBS.toArray bytes)
+  (bytes, sender) <- recvFrom socket size
+  pure (sender, toArray bytes)
 
 -- | Send one datagram to an address. An empty array is an empty datagram.
-sendTo :: MonadIO m => Net.Socket -> Net.SockAddr -> Array Word8 -> m ()
+sendTo :: MonadIO m => Socket -> SockAddr -> Array Word8 -> m ()
 sendTo socket destination datagram =
   -- One call: a datagram goes whole or not at all, and the sendAllTo of
   -- network sends nothing for an empty one.
-  liftIO (void (NetBS.sendTo socket (StreamlyBS.fromArray datagram) destination))
+  liftIO (void (NB.sendTo socket (fromArray datagram) destination))
 
 -- | Send each array as a datagram to one address.
-write :: MonadIO m => Net.Socket -> Net.SockAddr -> Fold m (Array Word8) ()
-write socket destination = Fold.drainMapM (sendTo socket destination)
+write :: MonadIO m => Socket -> SockAddr -> Fold m (Array Word8) ()
+write socket destination = drainMapM (sendTo socket destination)
 
 -- | Send each array as a datagram to the address that comes with it.
-writeTo :: MonadIO m => Net.Socket -> Fold m (Net.SockAddr, Array Word8) ()
-writeTo socket = Fold.drainMapM (uncurry (sendTo socket))
+writeTo :: MonadIO m => Socket -> Fold m (SockAddr, Array Word8) ()
+writeTo socket = drainMapM (uncurry (sendTo socket))
 
 -- | Allow or forbid sending to broadcast addresses.
-setBroadcast :: Net.Socket -> Bool -> IO ()
-setBroadcast socket allowed = Net.setSocketOption socket Net.Broadcast (if allowed then 1 else 0)
+setBroadcast :: Socket -> Bool -> IO ()
+setBroadcast socket allowed = setSocketOption socket Broadcast (if allowed then 1 else 0)
 
 -- | A multicast group and the interface to reach it by, as the system
 -- wants them (@struct ip_mreq@).
-data Membership = Membership Net.HostAddress Net.HostAddress
+data Membership = Membership HostAddress HostAddress
 
 instance Storable Membership where
   sizeOf _ = 8
@@ -166,19 +172,19 @@ instance Storable Membership where
 -- | Join an IPv4 multicast group, on the interface that has an address, or
 -- on the one the system chooses when the address is 0. The socket then
 -- receives the datagrams sent to the group on the port it is bound to.
-joinGroup :: Net.Socket -> Net.HostAddress -> Net.HostAddress -> IO ()
-joinGroup socket group interface = Net.setSockOpt socket (Net.SockOpt ipProtocol addMembership) (Membership group interface)
+joinGroup :: Socket -> HostAddress -> HostAddress -> IO ()
+joinGroup socket group interface = setSockOpt socket (SockOpt ipProtocol addMembership) (Membership group interface)
 
 -- | Leave an IPv4 multicast group joined with 'joinGroup'.
-leaveGroup :: Net.Socket -> Net.HostAddress -> Net.HostAddress -> IO ()
-leaveGroup socket group interface = Net.setSockOpt socket (Net.SockOpt ipProtocol dropMembership) (Membership group interface)
+leaveGroup :: Socket -> HostAddress -> HostAddress -> IO ()
+leaveGroup socket group interface = setSockOpt socket (SockOpt ipProtocol dropMembership) (Membership group interface)
 
 -- | How many routers the IPv4 multicast datagrams sent may cross. The
 -- systems start at 1: the local network.
-setMulticastTTL :: Net.Socket -> Int -> IO ()
-setMulticastTTL socket hops = Net.setSockOpt socket (Net.SockOpt ipProtocol multicastTtl) (fromIntegral hops :: CInt)
+setMulticastTTL :: Socket -> Int -> IO ()
+setMulticastTTL socket hops = setSockOpt socket (SockOpt ipProtocol multicastTtl) (fromIntegral hops :: CInt)
 
 -- | Whether the IPv4 multicast datagrams sent come back to the sockets of
 -- this machine that joined the group. The systems start with it on.
-setMulticastLoopback :: Net.Socket -> Bool -> IO ()
-setMulticastLoopback socket enabled = Net.setSockOpt socket (Net.SockOpt ipProtocol multicastLoop) (if enabled then 1 else 0 :: CInt)
+setMulticastLoopback :: Socket -> Bool -> IO ()
+setMulticastLoopback socket enabled = setSockOpt socket (SockOpt ipProtocol multicastLoop) (if enabled then 1 else 0 :: CInt)

@@ -6,16 +6,17 @@ datagrams received are a stream, each with the address of its sender;
 datagrams are sent one by one or through a fold.
 
 ```haskell
-import Network.Socket (SockAddr (..), tupleToHostAddress)
-import Streamly.Data.Array qualified as Array
-import Streamly.Data.Stream qualified as Stream
-import Streamly.External.Network.UDP
+import Network.Socket (SockAddr (SockAddrInet), tupleToHostAddress)
+import Streamly.Data.Array (fromList)
+import Streamly.Data.Stream (toList)
+import Streamly.External.Network.UDP (anyAddress, datagramsWithin, sendTo,
+                                      socketAt, withSocket)
 
 -- Ask, and collect the answers that come within a second.
 main :: IO ()
 main = withSocket (socketAt anyAddress) $ \socket -> do
-  sendTo socket (SockAddrInet 9003 (tupleToHostAddress (192, 0, 2, 1))) (Array.fromList [1, 2, 3])
-  answers <- Stream.toList (datagramsWithin 1000000 socket)
+  sendTo socket (SockAddrInet 9003 (tupleToHostAddress (192, 0, 2, 1))) (fromList [1, 2, 3])
+  answers <- toList (datagramsWithin 1000000 socket)
   print (map fst answers)
 ```
 
