@@ -1,6 +1,6 @@
 cabal-version:   3.12
 name:            streamly-network-udp
-version:         0.1.0.1
+version:         0.1.0.2
 synopsis:        UDP datagrams as Streamly streams
 description:
   UDP sockets for Streamly, over the network package: the datagrams
