@@ -1,6 +1,6 @@
 cabal-version:   3.12
 name:            streamly-network-udp
-version:         0.1.0.2
+version:         0.1.0.0
 synopsis:        UDP datagrams as Streamly streams
 description:
   UDP sockets for Streamly, over the network package: the datagrams
@@ -11,8 +11,8 @@ description:
 homepage:        https://github.com/GuillaumedeVolpiano/streamly-network-udp
 license:         BSD-3-Clause
 license-file:    LICENSE
-author:          GuillaumedeVolpiano
-maintainer:      xavier@wheredoibegin.fr
+author:          Xavier Dectot
+maintainer:      Xavier Dectot <xavier@wheredoibegin.fr>
 category:        Network, Streamly
 build-type:      Simple
 tested-with:     GHC ==9.8.4 || ==9.10.3 || ==9.12.4
